@@ -9,12 +9,14 @@ interface SubscribedAppProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
+  interviewMode: string
 }
 
 const SubscribedApp: React.FC<SubscribedAppProps> = ({
   credits,
   currentLanguage,
-  setLanguage
+  setLanguage,
+  interviewMode
 }) => {
   const queryClient = useQueryClient()
   const [view, setView] = useState<"queue" | "solutions" | "debug">("queue")
@@ -43,6 +45,31 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
       cleanup()
     }
   }, [])
+
+  // Effect to reset queries when interview mode changes
+  useEffect(() => {
+    // Reset queries and view when interview mode changes
+    queryClient.invalidateQueries({
+      queryKey: ["screenshots"]
+    })
+    queryClient.invalidateQueries({
+      queryKey: ["problem_statement"]
+    })
+    queryClient.invalidateQueries({
+      queryKey: ["solution"]
+    })
+    queryClient.invalidateQueries({
+      queryKey: ["new_solution"]
+    })
+    setView("queue")
+    
+    // Show a toast indicating the mode change
+    showToast(
+      "Mode Changed", 
+      `Switched to ${interviewMode.replace('_', ' ')} mode`, 
+      "success"
+    )
+  }, [interviewMode])
 
   // Dynamically update the window size
   useEffect(() => {
@@ -142,6 +169,7 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
           credits={credits}
           currentLanguage={currentLanguage}
           setLanguage={setLanguage}
+          interviewMode={interviewMode}
         />
       ) : view === "solutions" ? (
         <Solutions
@@ -149,6 +177,7 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
           credits={credits}
           currentLanguage={currentLanguage}
           setLanguage={setLanguage}
+          interviewMode={interviewMode}
         />
       ) : null}
     </div>

@@ -21,13 +21,15 @@ interface QueueProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
+  interviewMode: string
 }
 
 const Queue: React.FC<QueueProps> = ({
   setView,
   credits,
   currentLanguage,
-  setLanguage
+  setLanguage,
+  interviewMode
 }) => {
   const { showToast } = useToast()
 
@@ -118,7 +120,6 @@ const Queue: React.FC<QueueProps> = ({
           "neutral"
         )
       }),
-      // Removed out of credits handler - unlimited credits in this version
     ]
 
     return () => {
@@ -152,6 +153,7 @@ const Queue: React.FC<QueueProps> = ({
             credits={credits}
             currentLanguage={currentLanguage}
             setLanguage={setLanguage}
+            interviewMode={interviewMode}
           />
         </div>
       </div>

@@ -4,6 +4,8 @@ import { ipcMain, shell, dialog } from "electron"
 import { randomBytes } from "crypto"
 import { IIpcHandlerDeps } from "./main"
 import { configHelper } from "./ConfigHelper"
+import { ModelProvider } from "./models/ModelFactory"
+import { createModelAdapter } from "./models/ModelFactory"
 
 export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   console.log("Initializing IPC handlers")
@@ -21,17 +23,29 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     return configHelper.hasApiKey();
   })
   
-  ipcMain.handle("validate-api-key", async (_event, apiKey) => {
+  ipcMain.handle("validate-api-key", async (_event, apiKey: string, provider: ModelProvider = 'openai') => {
     // First check the format
-    if (!configHelper.isValidApiKeyFormat(apiKey)) {
+    if (!configHelper.isValidApiKeyFormat(apiKey, provider)) {
+      let errorMsg = "";
+      switch(provider) {
+        case 'openai':
+          errorMsg = "Invalid API key format. OpenAI API keys start with 'sk-'";
+          break;
+        case 'claude':
+          errorMsg = "Invalid API key format. Claude API keys start with 'sk-ant-'";
+          break;
+        default:
+          errorMsg = "Invalid API key format.";
+      }
+      
       return { 
         valid: false, 
-        error: "Invalid API key format. OpenAI API keys start with 'sk-'" 
+        error: errorMsg
       };
     }
     
-    // Then test the API key with OpenAI
-    const result = await configHelper.testApiKey(apiKey);
+    // Then test the API key with the provider
+    const result = await configHelper.testApiKey(apiKey, provider);
     return result;
   })
 
@@ -92,7 +106,10 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   // Screenshot processing handlers
   ipcMain.handle("process-screenshots", async () => {
     // Check for API key before processing
-    if (!configHelper.hasApiKey()) {
+    const config = configHelper.loadConfig();
+    const activeProvider = config.activeProvider;
+    
+    if (!configHelper.hasApiKey(activeProvider)) {
       const mainWindow = deps.getMainWindow();
       if (mainWindow) {
         mainWindow.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
@@ -182,12 +199,6 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     }
   })
 
-  // Auth-related handlers removed
-
-  ipcMain.handle("open-external-url", (event, url: string) => {
-    shell.openExternal(url)
-  })
-  
   // Open external URL handler
   ipcMain.handle("openLink", (event, url: string) => {
     try {
@@ -235,7 +246,10 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   ipcMain.handle("trigger-process-screenshots", async () => {
     try {
       // Check for API key before processing
-      if (!configHelper.hasApiKey()) {
+      const config = configHelper.loadConfig();
+      const activeProvider = config.activeProvider;
+      
+      if (!configHelper.hasApiKey(activeProvider)) {
         const mainWindow = deps.getMainWindow();
         if (mainWindow) {
           mainWindow.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
@@ -347,5 +361,64 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       console.error("Error deleting last screenshot:", error)
       return { success: false, error: "Failed to delete last screenshot" }
     }
+  })
+  
+  // Get available AI providers handler
+  ipcMain.handle("get-available-providers", () => {
+    return {
+      openai: { 
+        name: 'OpenAI', 
+        description: 'GPT models with great coding and vision capabilities' 
+      },
+      claude: { 
+        name: 'Claude', 
+        description: 'Anthropic models with strong reasoning and long contexts' 
+      }
+    };
+  })
+  
+  // Get available models for a provider handler
+  ipcMain.handle("get-available-models", (_event, provider: ModelProvider) => {
+    switch(provider) {
+      case 'openai':
+        return [
+          { id: 'gpt-4o', name: 'GPT-4o', description: 'Best overall performance, supports images' },
+          { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Faster, more cost-effective option' },
+          { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'Advanced capabilities with vision support' },
+          { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', description: 'Fast and efficient for text-only tasks' }
+        ];
+      case 'claude':
+        return [
+          { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', description: 'Most powerful Claude model' },
+          { id: 'claude-3-sonnet-20240229', name: 'Claude 3 Sonnet', description: 'Great balance of intelligence and speed' },
+          { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku', description: 'Fastest Claude model, good for quick responses' },
+          { id: 'claude-3-5-sonnet-20240620', name: 'Claude 3.5 Sonnet', description: 'Latest Claude with improved capabilities' }
+        ];
+      default:
+        return [];
+    }
+  })
+  
+  // Interview modes handler
+  ipcMain.handle("get-interview-modes", () => {
+    return [
+      { id: 'coding', name: 'Coding Algorithms', description: 'Standard coding algorithm problems' },
+      { id: 'system_design', name: 'System Design', description: 'System architecture and design questions' },
+      { id: 'react', name: 'React Frontend', description: 'React component and UI implementation' },
+      { id: 'sql', name: 'SQL', description: 'Database query and schema design questions' },
+      { id: 'linux', name: 'Linux/Kernel', description: 'Command-line and system administration problems' },
+      { id: 'certification', name: 'Certification Exam', description: 'Multiple choice, fill-in-blank, and other exam formats' }
+    ];
+  })
+  
+  // Set interview mode handler
+  ipcMain.handle("set-interview-mode", (_event, mode: string) => {
+    configHelper.setInterviewMode(mode);
+    return { success: true };
+  })
+  
+  // Get current interview mode handler
+  ipcMain.handle("get-interview-mode", () => {
+    return configHelper.getInterviewMode();
   })
 }

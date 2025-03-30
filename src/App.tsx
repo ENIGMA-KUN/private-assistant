@@ -15,6 +15,7 @@ import {
 import { ToastContext } from "./contexts/toast"
 import { WelcomeScreen } from "./components/WelcomeScreen"
 import { SettingsDialog } from "./components/Settings/SettingsDialog"
+import ModeSelector from "./components/ModeSelector/ModeSelector"
 
 // Create a React Query client
 const queryClient = new QueryClient({
@@ -41,12 +42,14 @@ function App() {
   })
   const [credits, setCredits] = useState<number>(999) // Unlimited credits
   const [currentLanguage, setCurrentLanguage] = useState<string>("python")
+  const [interviewMode, setInterviewMode] = useState<string>("coding")
   const [isInitialized, setIsInitialized] = useState(false)
   const [hasApiKey, setHasApiKey] = useState(false)
-  const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
-  // Note: Model selection is now handled via separate extraction/solution/debugging model settings
-
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [providerInfo, setProviderInfo] = useState<{
+    provider: string;
+    model: string;
+  }>({ provider: 'openai', model: 'gpt-4o' })
 
   // Set unlimited credits
   const updateCredits = useCallback(() => {
@@ -58,6 +61,11 @@ function App() {
   const updateLanguage = useCallback((newLanguage: string) => {
     setCurrentLanguage(newLanguage)
     window.__LANGUAGE__ = newLanguage
+  }, [])
+
+  // Helper function to update interview mode
+  const updateInterviewMode = useCallback((newMode: string) => {
+    setInterviewMode(newMode)
   }, [])
 
   // Helper function to mark initialization complete
@@ -83,12 +91,36 @@ function App() {
     []
   )
 
-  // Check for OpenAI API key and prompt if not found
+  // Check for API key and load configuration
   useEffect(() => {
-    const checkApiKey = async () => {
+    const loadConfig = async () => {
       try {
+        // Check for API key
         const hasKey = await window.electronAPI.checkApiKey()
         setHasApiKey(hasKey)
+        
+        // Load config including language and mode
+        const config = await window.electronAPI.getConfig()
+        
+        // Set provider info
+        setProviderInfo({
+          provider: config.activeProvider || 'openai',
+          model: config.providers[config.activeProvider || 'openai']?.model || 'gpt-4o'
+        })
+        
+        // Load language preference
+        if (config && config.language) {
+          updateLanguage(config.language)
+        } else {
+          updateLanguage("python")
+        }
+        
+        // Load interview mode
+        if (config && config.interviewMode) {
+          setInterviewMode(config.interviewMode)
+        } else {
+          setInterviewMode("coding")
+        }
         
         // If no API key is found, show the settings dialog after a short delay
         if (!hasKey) {
@@ -97,14 +129,14 @@ function App() {
           }, 1000)
         }
       } catch (error) {
-        console.error("Failed to check API key:", error)
+        console.error("Failed to load config:", error)
       }
     }
     
     if (isInitialized) {
-      checkApiKey()
+      loadConfig()
     }
-  }, [isInitialized])
+  }, [isInitialized, updateLanguage])
 
   // Initialize dropdown handler
   useEffect(() => {
@@ -149,30 +181,14 @@ function App() {
 
   // Initialize basic app state
   useEffect(() => {
-    // Load config and set values
+    // Set unlimited credits and initialize
     const initializeApp = async () => {
       try {
         // Set unlimited credits
         updateCredits()
-        
-        // Load config including language and model settings
-        const config = await window.electronAPI.getConfig()
-        
-        // Load language preference
-        if (config && config.language) {
-          updateLanguage(config.language)
-        } else {
-          updateLanguage("python")
-        }
-        
-        // Model settings are now managed through the settings dialog
-        // and stored in config as extractionModel, solutionModel, and debuggingModel
-        
         markInitialized()
       } catch (error) {
         console.error("Failed to initialize app:", error)
-        // Fallback to defaults
-        updateLanguage("python")
         markInitialized()
       }
     }
@@ -183,10 +199,10 @@ function App() {
     const onApiKeyInvalid = () => {
       showToast(
         "API Key Invalid",
-        "Your OpenAI API key appears to be invalid or has insufficient credits",
+        "Your API key appears to be invalid or has insufficient credits",
         "error"
       )
-      setApiKeyDialogOpen(true)
+      setIsSettingsOpen(true)
     }
 
     // Setup API key invalid listener
@@ -209,7 +225,7 @@ function App() {
     }
   }, [updateCredits, updateLanguage, markInitialized, showToast])
 
-  // API Key dialog management
+  // Settings dialog management
   const handleOpenSettings = useCallback(() => {
     console.log('Opening settings dialog');
     setIsSettingsOpen(true);
@@ -220,22 +236,6 @@ function App() {
     setIsSettingsOpen(open);
   }, []);
 
-  const handleApiKeySave = useCallback(async (apiKey: string) => {
-    try {
-      await window.electronAPI.updateConfig({ apiKey })
-      setHasApiKey(true)
-      showToast("Success", "API key saved successfully", "success")
-      
-      // Reload app after a short delay to reinitialize with the new API key
-      setTimeout(() => {
-        window.location.reload()
-      }, 1500)
-    } catch (error) {
-      console.error("Failed to save API key:", error)
-      showToast("Error", "Failed to save API key", "error")
-    }
-  }, [showToast])
-
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
@@ -243,11 +243,35 @@ function App() {
           <div className="relative">
             {isInitialized ? (
               hasApiKey ? (
-                <SubscribedApp
-                  credits={credits}
-                  currentLanguage={currentLanguage}
-                  setLanguage={updateLanguage}
-                />
+                <div className="flex flex-col">
+                  {/* Show model info and mode selector in a header bar */}
+                  <div className="bg-black/50 border-b border-white/10 px-4 py-2 flex justify-between items-center">
+                    <ModeSelector 
+                      currentMode={interviewMode}
+                      onChange={updateInterviewMode}
+                    />
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs text-white/70 bg-black/50 px-3 py-1 rounded-lg border border-white/10">
+                        <span className="capitalize">{providerInfo.provider}</span>: {providerInfo.model.split('-')[0]}
+                      </div>
+                      <button 
+                        className="text-white/60 hover:text-white/90 transition-colors"
+                        onClick={handleOpenSettings}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <SubscribedApp
+                    credits={credits}
+                    currentLanguage={currentLanguage}
+                    setLanguage={updateLanguage}
+                    interviewMode={interviewMode}
+                  />
+                </div>
               ) : (
                 <WelcomeScreen onOpenSettings={handleOpenSettings} />
               )

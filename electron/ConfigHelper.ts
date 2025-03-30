@@ -3,26 +3,44 @@ import fs from "node:fs"
 import path from "node:path"
 import { app } from "electron"
 import { EventEmitter } from "events"
-import { OpenAI } from "openai"
+import { ModelProvider } from "./models/ModelFactory"
+import { createModelAdapter } from "./models/ModelFactory"
+
+export interface ModelProviderConfig {
+  apiKey: string;
+  model: string;
+}
 
 interface Config {
-  apiKey: string;
-  extractionModel: string;
-  solutionModel: string;
-  debuggingModel: string;
+  activeProvider: ModelProvider;
+  providers: {
+    openai: ModelProviderConfig;
+    claude: ModelProviderConfig;
+  };
   language: string;
   opacity: number;
+  interviewMode: string;
+  launchMode: 'visible' | 'invisible';
 }
 
 export class ConfigHelper extends EventEmitter {
   private configPath: string;
   private defaultConfig: Config = {
-    apiKey: "",
-    extractionModel: "gpt-4o",
-    solutionModel: "gpt-4o",
-    debuggingModel: "gpt-4o",
+    activeProvider: "openai",
+    providers: {
+      openai: {
+        apiKey: "",
+        model: "gpt-4o"
+      },
+      claude: {
+        apiKey: "",
+        model: "claude-3-sonnet-20240229"
+      }
+    },
     language: "python",
-    opacity: 1.0
+    opacity: 1.0,
+    interviewMode: "coding",
+    launchMode: 'invisible'
   };
 
   constructor() {
@@ -47,6 +65,9 @@ export class ConfigHelper extends EventEmitter {
     try {
       if (!fs.existsSync(this.configPath)) {
         this.saveConfig(this.defaultConfig);
+      } else {
+        // Migrate old config if necessary
+        this.migrateConfig();
       }
     } catch (err) {
       console.error("Error ensuring config exists:", err);
@@ -54,42 +75,73 @@ export class ConfigHelper extends EventEmitter {
   }
 
   /**
-   * Load the configuration from disk
+   * Migrate from old config format to new multi-provider format
    */
-  /**
-   * Validate and sanitize model selection to ensure only allowed models are used
-   */
-  private sanitizeModelSelection(model: string): string {
-    // Only allow gpt-4o and gpt-4o-mini
-    const allowedModels = ['gpt-4o', 'gpt-4o-mini'];
-    if (!allowedModels.includes(model)) {
-      // Default to gpt-4o if an invalid model is specified
-      console.warn(`Invalid model specified: ${model}. Using default model: gpt-4o`);
-      return 'gpt-4o';
+  private migrateConfig(): void {
+    try {
+      const oldConfig = this.loadRawConfig();
+      
+      // Check if this is an old format config (pre-multi provider)
+      if (oldConfig && oldConfig.apiKey !== undefined && !oldConfig.providers) {
+        console.log("Migrating old config format to new multi-provider format");
+        
+        const newConfig: Config = {
+          activeProvider: "openai",
+          providers: {
+            openai: {
+              apiKey: oldConfig.apiKey || "",
+              model: oldConfig.extractionModel || "gpt-4o"
+            },
+            claude: {
+              apiKey: "",
+              model: "claude-3-sonnet-20240229"
+            }
+          },
+          language: oldConfig.language || "python",
+          opacity: oldConfig.opacity || 1.0,
+          interviewMode: "coding",
+          launchMode: 'invisible'
+        };
+        
+        this.saveConfig(newConfig);
+      }
+    } catch (err) {
+      console.error("Error migrating config:", err);
     }
-    return model;
   }
 
+  /**
+   * Load the raw configuration from disk without applying defaults
+   */
+  private loadRawConfig(): any {
+    try {
+      if (fs.existsSync(this.configPath)) {
+        const configData = fs.readFileSync(this.configPath, 'utf8');
+        return JSON.parse(configData);
+      }
+    } catch (err) {
+      console.error("Error loading raw config:", err);
+    }
+    return null;
+  }
+
+  /**
+   * Load the configuration from disk
+   */
   public loadConfig(): Config {
     try {
       if (fs.existsSync(this.configPath)) {
         const configData = fs.readFileSync(this.configPath, 'utf8');
         const config = JSON.parse(configData);
         
-        // Sanitize model selections to ensure only allowed models are used
-        if (config.extractionModel) {
-          config.extractionModel = this.sanitizeModelSelection(config.extractionModel);
-        }
-        if (config.solutionModel) {
-          config.solutionModel = this.sanitizeModelSelection(config.solutionModel);
-        }
-        if (config.debuggingModel) {
-          config.debuggingModel = this.sanitizeModelSelection(config.debuggingModel);
-        }
-        
+        // Merge with default config to ensure all properties exist
         return {
           ...this.defaultConfig,
-          ...config
+          ...config,
+          providers: {
+            ...this.defaultConfig.providers,
+            ...config.providers
+          }
         };
       }
       
@@ -126,27 +178,24 @@ export class ConfigHelper extends EventEmitter {
     try {
       const currentConfig = this.loadConfig();
       
-      // Sanitize model selections in the updates
-      if (updates.extractionModel) {
-        updates.extractionModel = this.sanitizeModelSelection(updates.extractionModel);
-      }
-      if (updates.solutionModel) {
-        updates.solutionModel = this.sanitizeModelSelection(updates.solutionModel);
-      }
-      if (updates.debuggingModel) {
-        updates.debuggingModel = this.sanitizeModelSelection(updates.debuggingModel);
+      // Handle nested updates
+      if (updates.providers) {
+        for (const provider in updates.providers) {
+          if (currentConfig.providers[provider as keyof typeof currentConfig.providers]) {
+            currentConfig.providers[provider as keyof typeof currentConfig.providers] = {
+              ...currentConfig.providers[provider as keyof typeof currentConfig.providers],
+              ...updates.providers[provider as keyof typeof updates.providers]
+            };
+          }
+        }
+        delete updates.providers;
       }
       
       const newConfig = { ...currentConfig, ...updates };
       this.saveConfig(newConfig);
       
-      // Only emit update event for changes other than opacity
-      // This prevents re-initializing the OpenAI client when only opacity changes
-      if (updates.apiKey !== undefined || updates.extractionModel !== undefined || 
-          updates.solutionModel !== undefined || updates.debuggingModel !== undefined || 
-          updates.language !== undefined) {
-        this.emit('config-updated', newConfig);
-      }
+      // Emit update event
+      this.emit('config-updated', newConfig);
       
       return newConfig;
     } catch (error) {
@@ -156,19 +205,77 @@ export class ConfigHelper extends EventEmitter {
   }
 
   /**
-   * Check if the API key is configured
+   * Update specific provider config
    */
-  public hasApiKey(): boolean {
+  public updateProviderConfig(
+    provider: ModelProvider,
+    updates: Partial<ModelProviderConfig>
+  ): Config {
+    const currentConfig = this.loadConfig();
+    const providerConfig = currentConfig.providers[provider];
+    
+    if (providerConfig) {
+      currentConfig.providers[provider] = {
+        ...providerConfig,
+        ...updates
+      };
+      
+      this.saveConfig(currentConfig);
+      this.emit('config-updated', currentConfig);
+    }
+    
+    return currentConfig;
+  }
+
+  /**
+   * Get active provider
+   */
+  public getActiveProvider(): ModelProvider {
+    return this.loadConfig().activeProvider;
+  }
+
+  /**
+   * Set active provider
+   */
+  public setActiveProvider(provider: ModelProvider): void {
+    this.updateConfig({ activeProvider: provider });
+  }
+
+  /**
+   * Get provider config
+   */
+  public getProviderConfig(provider: ModelProvider): ModelProviderConfig {
     const config = this.loadConfig();
-    return !!config.apiKey && config.apiKey.trim().length > 0;
+    return config.providers[provider];
+  }
+
+  /**
+   * Check if the selected provider has API key configured
+   */
+  public hasApiKey(provider?: ModelProvider): boolean {
+    const config = this.loadConfig();
+    const providerToCheck = provider || config.activeProvider;
+    const providerConfig = config.providers[providerToCheck];
+    
+    return !!providerConfig && !!providerConfig.apiKey && providerConfig.apiKey.trim().length > 0;
   }
   
   /**
-   * Validate the API key format
+   * Validate the API key format for a specific provider
    */
-  public isValidApiKeyFormat(apiKey: string): boolean {
-    // Basic format validation for OpenAI API keys
-    return /^sk-[a-zA-Z0-9]{32,}$/.test(apiKey.trim());
+  public isValidApiKeyFormat(apiKey: string, provider: ModelProvider): boolean {
+    if (!apiKey || apiKey.trim().length === 0) return false;
+    
+    switch (provider) {
+      case 'openai':
+        // OpenAI API keys typically start with "sk-" and are about 51 chars long
+        return /^sk-[a-zA-Z0-9]{32,}$/.test(apiKey.trim());
+      case 'claude':
+        // Claude API keys start with "sk-ant-" and are longer
+        return /^sk-ant-[a-zA-Z0-9]{24,}$/.test(apiKey.trim());
+      default:
+        return apiKey.trim().length > 10; // Generic validation
+    }
   }
   
   /**
@@ -204,31 +311,55 @@ export class ConfigHelper extends EventEmitter {
   }
   
   /**
-   * Test API key with OpenAI
+   * Get the current interview mode
    */
-  public async testApiKey(apiKey: string): Promise<{valid: boolean, error?: string}> {
+  public getInterviewMode(): string {
+    const config = this.loadConfig();
+    return config.interviewMode || "coding";
+  }
+  
+  /**
+   * Set the interview mode
+   */
+  public setInterviewMode(mode: string): void {
+    this.updateConfig({ interviewMode: mode });
+  }
+  
+  /**
+   * Get launch mode (visible/invisible)
+   */
+  public getLaunchMode(): 'visible' | 'invisible' {
+    const config = this.loadConfig();
+    return config.launchMode || 'invisible';
+  }
+  
+  /**
+   * Set launch mode
+   */
+  public setLaunchMode(mode: 'visible' | 'invisible'): void {
+    this.updateConfig({ launchMode: mode });
+  }
+  
+  /**
+   * Test API key with the provider
+   */
+  public async testApiKey(apiKey: string, provider: ModelProvider): Promise<{valid: boolean, error?: string}> {
     try {
-      const openai = new OpenAI({ apiKey });
-      // Make a simple API call to test the key
-      await openai.models.list();
-      return { valid: true };
+      // Use default model for the provider
+      const model = provider === 'openai' ? 'gpt-4o' : 'claude-3-haiku-20240307';
+      
+      // Create adapter for the specific provider
+      const adapter = createModelAdapter({
+        provider,
+        apiKey,
+        model
+      });
+      
+      // Test the API key
+      return await adapter.testApiKey(apiKey);
     } catch (error: any) {
-      console.error('API key test failed:', error);
-      
-      // Determine the specific error type for better error messages
-      let errorMessage = 'Unknown error validating API key';
-      
-      if (error.status === 401) {
-        errorMessage = 'Invalid API key. Please check your key and try again.';
-      } else if (error.status === 429) {
-        errorMessage = 'Rate limit exceeded. Your API key has reached its request limit or has insufficient quota.';
-      } else if (error.status === 500) {
-        errorMessage = 'OpenAI server error. Please try again later.';
-      } else if (error.message) {
-        errorMessage = `Error: ${error.message}`;
-      }
-      
-      return { valid: false, error: errorMessage };
+      console.error(`API key test failed for ${provider}:`, error);
+      return { valid: false, error: error.message || `Unknown error testing ${provider} API key` };
     }
   }
 }

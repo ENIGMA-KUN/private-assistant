@@ -10,6 +10,7 @@ interface QueueCommandsProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
+  interviewMode: string
 }
 
 const QueueCommands: React.FC<QueueCommandsProps> = ({
@@ -17,7 +18,8 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   screenshotCount = 0,
   credits,
   currentLanguage,
-  setLanguage
+  setLanguage,
+  interviewMode
 }) => {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
@@ -39,7 +41,10 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       
       // Clear the API key in the configuration
       await window.electronAPI.updateConfig({
-        apiKey: '',
+        providers: {
+          openai: { apiKey: '', model: 'gpt-4o' },
+          claude: { apiKey: '', model: 'claude-3-sonnet-20240229' }
+        }
       });
       
       showToast('Success', 'Logged out successfully', 'success');
@@ -61,6 +66,38 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   const handleMouseLeave = () => {
     setIsTooltipVisible(false)
   }
+  
+  // Get help text based on interview mode
+  const getHelpText = () => {
+    switch(interviewMode) {
+      case 'coding':
+        return screenshotCount === 0
+          ? "Take a screenshot of the coding problem"
+          : "Take a screenshot of additional problem details";
+      case 'system_design':
+        return screenshotCount === 0
+          ? "Take a screenshot of the system design problem"
+          : "Take a screenshot of additional requirements";
+      case 'react':
+        return screenshotCount === 0
+          ? "Take a screenshot of the React component task"
+          : "Take a screenshot of UI requirements";
+      case 'sql':
+        return screenshotCount === 0
+          ? "Take a screenshot of the SQL problem"
+          : "Take a screenshot of table schemas";
+      case 'linux':
+        return screenshotCount === 0
+          ? "Take a screenshot of the Linux/terminal task"
+          : "Take a screenshot of command requirements";
+      case 'certification':
+        return screenshotCount === 0
+          ? "Take a screenshot of the exam question"
+          : "Take a screenshot of answer choices";
+      default:
+        return "Take a screenshot";
+    }
+  };
 
   return (
     <div>
@@ -83,17 +120,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             }}
           >
             <span className="text-[11px] leading-none truncate">
-              {screenshotCount === 0
-                ? "Take first screenshot"
-                : screenshotCount === 1
-                ? "Take second screenshot"
-                : screenshotCount === 2
-                ? "Take third screenshot"
-                : screenshotCount === 3
-                ? "Take fourth screenshot"
-                : screenshotCount === 4
-                ? "Take fifth screenshot"
-                : "Next will replace first screenshot"}
+              {getHelpText()}
             </span>
             <div className="flex gap-1">
               <button className="bg-white/10 rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
@@ -112,7 +139,6 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                 credits <= 0 ? "opacity-50 cursor-not-allowed" : ""
               }`}
               onClick={async () => {
-
                 try {
                   const result =
                     await window.electronAPI.triggerProcessScreenshots()
@@ -130,7 +156,9 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
               }}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[11px] leading-none">Solve </span>
+                <span className="text-[11px] leading-none">
+                  {interviewMode === 'certification' ? 'Answer' : 'Solve'}
+                </span>
                 <div className="flex gap-1 ml-2">
                   <button className="bg-white/10 rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
                     {COMMAND_KEY}
@@ -308,7 +336,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         }}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="truncate">Solve</span>
+                          <span className="truncate">{interviewMode === 'certification' ? 'Answer Question' : 'Solve Problem'}</span>
                           <div className="flex gap-1 flex-shrink-0">
                             <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] leading-none">
                               {COMMAND_KEY}
@@ -320,7 +348,9 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         </div>
                         <p className="text-[10px] leading-relaxed text-white/70 truncate mt-1">
                           {screenshotCount > 0
-                            ? "Generate a solution based on the current problem."
+                            ? interviewMode === 'certification' 
+                              ? "Generate an answer based on the current question."
+                              : "Generate a solution based on the current problem."
                             : "Take a screenshot first to generate a solution."}
                         </p>
                       </div>
@@ -387,7 +417,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                       {/* API Key Settings */}
                       <div className="mb-3 px-2 space-y-1">
                         <div className="flex items-center justify-between text-[13px] font-medium text-white/90">
-                          <span>OpenAI API Settings</span>
+                          <span>AI Settings</span>
                           <button
                             className="bg-white/10 hover:bg-white/20 px-2 py-1 rounded text-[11px]"
                             onClick={() => window.electronAPI.openSettingsPortal()}
